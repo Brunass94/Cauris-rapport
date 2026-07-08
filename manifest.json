@@ -1,0 +1,26 @@
+{
+  "name": "CAURIS Rapport Journalier",
+  "short_name": "CAURIS RJ",
+  "description": "Application de rapport journalier de chantier CAURIS BTP",
+  "start_url": "/Cauris-rapport/",
+  "scope": "/Cauris-rapport/",
+  "display": "standalone",
+  "background_color": "#0F1117",
+  "theme_color": "#F05A28",
+  "orientation": "portrait",
+  "lang": "fr",
+  "icons": [
+    {
+      "src": "icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}
