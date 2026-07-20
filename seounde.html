@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Migration CAURIS v2 → Firebase</title>
+<style>
+  body { font-family: system-ui, sans-serif; background:#0d1117; color:#e6edf3; max-width:720px; margin:40px auto; padding:0 20px; }
+  h1 { color:#f0873c; font-size:22px; }
+  button { background:#f0873c; color:#fff; border:none; padding:14px 28px; border-radius:10px; font-size:16px; font-weight:700; cursor:pointer; }
+  button:disabled { opacity:.5; cursor:not-allowed; }
+  #log { background:#161b22; border:1px solid #30363d; border-radius:10px; padding:16px; margin-top:20px; font-family:monospace; font-size:13px; white-space:pre-wrap; min-height:200px; max-height:60vh; overflow:auto; }
+  .warn { background:rgba(240,135,60,.1); border:1px solid rgba(240,135,60,.4); border-radius:10px; padding:12px 16px; font-size:14px; margin:16px 0; }
+</style>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
+</head>
+<body>
+<h1>🚚 Migration CAURIS v2 : Google Sheets → Firebase</h1>
+<div class="warn">
+  <b>VERSION 2</b> — avec test de connexion. Cette page copie <b>toutes les données</b>
+  du Google Sheets vers Firestore. Le Sheets n'est pas modifié : rien n'est perdu.
+</div>
+<button id="go">Lancer la migration</button>
+<div id="log">Prêt (version 2). Cliquez sur « Lancer la migration ».</div>
+
+<script>
+var SU = 'https://script.google.com/macros/s/AKfycbzGCpggMH3OKymB4_ZBxNYRLbTZVzQdiYXCzIwdbxdWRyb61x8w6vMUdBLRB1wuowoyHw/exec';
+
+var firebaseConfig = {
+  apiKey: "AIzaSyB4tcfHaFAQMSHksOiq-N6BrYzHcNxkNd4",
+  authDomain: "cauris-rapport.firebaseapp.com",
+  projectId: "cauris-rapport",
+  storageBucket: "cauris-rapport.firebasestorage.app",
+  messagingSenderId: "1060757272334",
+  appId: "1:1060757272334:web:6482a9b60fdf3bdbf7095f"
+};
+firebase.initializeApp(firebaseConfig);
+var db = firebase.firestore();
+// Contourne les réseaux/box qui bloquent le canal temps réel de Firestore
+db.settings({ experimentalAutoDetectLongPolling: true, merge: true });
+
+var logEl = document.getElementById('log');
+function log(msg) { logEl.textContent += '\n' + msg; logEl.scrollTop = logEl.scrollHeight; }
+
+// Toute promesse Firestore passe par un délai maximal : plus jamais d'écran figé
+function withTimeout(promise, ms) {
+  return Promise.race([
+    promise,
+    new Promise(function(_, rej) { setTimeout(function() { rej(new Error('TIMEOUT')); }, ms); })
+  ]);
+}
+
+function collectionFor(id) {
+  if (id.indexOf('rj_') === 0) return 'rapports';
+  if (id.indexOf('doc_') === 0) return 'documents';
+  return 'data';
+}
+
+document.getElementById('go').addEventListener('click', function() {
+  var btn = this;
+  btn.disabled = true;
+  logEl.textContent = '⏳ Lecture du Google Sheets (mode léger)...';
+
+  var xhr = new XMLHttpRequest();
+  xhr.open('GET', SU + '?t=' + Date.now(), true);
+  xhr.timeout = 60000;
+  xhr.onload = function() {
+    var d;
+    try { d = JSON.parse(xhr.responseText); }
+    catch(e) { log('❌ Réponse du Sheets illisible.'); btn.disabled = false; return; }
+
+    var items = [];
+    Object.keys(d.rapports || {}).forEach(function(id) { items.push({id: id, rec: d.rapports[id], col: 'rapports'}); });
+    Object.keys(d.documents || {}).forEach(function(id) { items.push({id: id, rec: d.documents[id], col: 'documents'}); });
+    Object.keys(d.vehicles || {}).forEach(function(id) {
+      if ((d.rapports && d.rapports[id]) || (d.documents && d.documents[id])) return;
+      items.push({id: id, rec: d.vehicles[id], col: collectionFor(id)});
+    });
+
+    log('📦 ' + items.length + ' enregistrements à copier.');
+    if (d._skipped && d._skipped.length) log('ℹ️ ' + d._skipped.length + ' enregistrements lourds NON migrés (voulu).');
+
+    var i = 0, ok = 0, ko = 0;
+    function next() {
+      if (i >= items.length) {
+        log('\n========================================');
+        log('✅ Migration terminée : ' + ok + ' copiés, ' + (ko ? ko + ' échecs ❌' : '0 échec') + '.');
+        log(ko ? '⚠️ Recliquez pour retenter les échecs (sans danger).' :
+                 '👉 Mettez maintenant en ligne le nouveau index.html et sw.js sur GitHub.');
+        btn.disabled = false;
+        btn.textContent = 'Relancer (sans danger)';
+        return;
+      }
+      var it = items[i];
+      withTimeout(db.collection(it.col).doc(String(it.id)).set(it.rec || {}), 15000)
+        .then(function() { ok++; i++; if (i % 20 === 0) log('   ... ' + i + ' / ' + items.length); next(); })
+        .catch(function(e) { ko++; log('❌ ' + it.id + ' : ' + (e.code || e.message)); i++; next(); });
+    }
+
+    log('🔌 Test de connexion à Firestore...');
+    withTimeout(db.collection('data').doc('_test_migration').set({t: Date.now()}), 12000)
+      .then(function() {
+        log('🔌 Connexion Firestore : OK ✅ — démarrage de la copie...');
+        db.collection('data').doc('_test_migration').delete();
+        next();
+      })
+      .catch(function(e) {
+        if (e && e.message === 'TIMEOUT') {
+          log('❌ CONNEXION FIRESTORE BLOQUÉE (aucune réponse en 12 s).');
+          log('   1. Votre réseau (box, pare-feu) bloque peut-être firestore.googleapis.com');
+          log('      → Réessayez via le partage de connexion 4G/5G de votre téléphone.');
+          log('   2. Ou la base a un identifiant inattendu : dans la console Firebase,');
+          log('      le sélecteur à côté de "Base de données" doit indiquer (default).');
+        } else {
+          log('❌ Erreur Firestore : ' + (e.code || e.message));
+          if (e.code === 'permission-denied') log('   → Règles de sécurité non publiées (onglet Sécurité → Publier).');
+          if (e.code === 'not-found') log('   → Base introuvable sous (default) : vérifiez le sélecteur de base dans la console.');
+        }
+        btn.disabled = false;
+      });
+  };
+  xhr.onerror = xhr.ontimeout = function() {
+    log('❌ Impossible de joindre le Google Sheets.');
+    btn.disabled = false;
+  };
+  xhr.send();
+});
+</script>
+</body>
+</html>
